@@ -5,11 +5,13 @@
 module Command.Update
        ( vote
        , propose
+       , proposeUnlockStakeEpoch
        ) where
 
 import           Universum
 
 import qualified Data.ByteString          as BS
+import           Data.Default             (def)
 import qualified Data.HashMap.Strict      as HM
 import           Data.List                ((!!))
 import           Data.Time.Units          (convertUnit)
@@ -18,24 +20,27 @@ import           Serokell.Util            (sec)
 import           System.Wlog              (logDebug)
 
 import           Pos.Binary               (Raw)
-import           Pos.Communication        (SendActions, immediateConcurrentConversations,
+import           Pos.Communication        (NodeId, SendActions,
+                                           immediateConcurrentConversations,
                                            submitUpdateProposal, submitVote)
 import           Pos.Configuration        (HasNodeConfiguration)
 import           Pos.Core.Configuration   (HasConfiguration, genesisBlockVersionData)
-import           Pos.Crypto               (Hash, SignTag (SignUSVote), emptyPassphrase,
-                                           encToPublic, hash, hashHexF, safeSign,
-                                           unsafeHash, withSafeSigner)
+import           Pos.Crypto               (Hash, SafeSigner, SignTag (SignUSVote),
+                                           emptyPassphrase, encToPublic, hash, hashHexF,
+                                           safeSign, unsafeHash, withSafeSigner)
 import           Pos.Data.Attributes      (mkAttributes)
+import           Pos.DB.Class             (MonadGState (..))
 import           Pos.Infra.Configuration  (HasInfraConfiguration)
 import           Pos.Update               (BlockVersionData (..),
                                            BlockVersionModifier (..), SystemTag, UpId,
-                                           UpdateData (..), UpdateVote (..),
-                                           mkUpdateProposalWSign)
+                                           UpdateData (..), UpdateProposal,
+                                           UpdateVote (..), mkUpdateProposalWSign)
 import           Pos.Update.Configuration (HasUpdateConfiguration)
 import           Pos.Util.CompileInfo     (HasCompileInfo)
 import           Pos.Wallet               (getSecretKeys)
 
-import           Command.Types            (ProposeUpdateParams (..),
+import           Command.Types            (ProposeUnlockStakeEpochParams (..),
+                                           ProposeUpdateParams (..),
                                            ProposeUpdateSystem (..))
 import           Mode                     (AuxxMode, CmdCtx (..), getCmdCtx)
 
@@ -93,8 +98,8 @@ propose
 propose sendActions ProposeUpdateParams{..} = do
     CmdCtx{ccPeers} <- getCmdCtx
     logDebug "Proposing update..."
-    skey <- (!! puIdx) <$> getSecretKeys
-    let BlockVersionData {..} = genesisBlockVersionData
+    skey <- (!! puSecretKeyIdx) <$> getSecretKeys
+    BlockVersionData {..} <- gsAdoptedBVData
     let bvm =
             BlockVersionModifier
             { bvmScriptVersion     = Just puScriptVersion
@@ -126,13 +131,65 @@ propose sendActions ProposeUpdateParams{..} = do
                         udata
                         (mkAttributes ())
                         ss
-            if null ccPeers
-                then putText "Error: no addresses specified"
-                else do
-                    submitUpdateProposal (immediateConcurrentConversations sendActions ccPeers) ss updateProposal
-                    let id = hash updateProposal
-                    putText $
-                      sformat ("Update proposal submitted, upId: "%hashHexF) id
+            submitUpdateProposal' sendActions ccPeers ss updateProposal
+
+proposeUnlockStakeEpoch ::
+       ( HasConfiguration
+       , HasInfraConfiguration
+       , HasUpdateConfiguration
+       , HasNodeConfiguration
+       , HasCompileInfo
+       )
+    => SendActions AuxxMode
+    -> ProposeUnlockStakeEpochParams
+    -> AuxxMode ()
+proposeUnlockStakeEpoch sendActions ProposeUnlockStakeEpochParams{..} = do
+    CmdCtx{ccPeers} <- getCmdCtx
+    skey <- (!! puseSecretKeyIdx) <$> getSecretKeys
+    let bvm =
+            BlockVersionModifier
+            { bvmScriptVersion     = Nothing
+            , bvmSlotDuration      = Nothing
+            , bvmMaxBlockSize      = Nothing
+            , bvmMaxHeaderSize     = Nothing
+            , bvmMaxTxSize         = Nothing
+            , bvmMaxProposalSize   = Nothing
+            , bvmMpcThd            = Nothing
+            , bvmHeavyDelThd       = Nothing
+            , bvmUpdateVoteThd     = Nothing
+            , bvmUpdateProposalThd = Nothing
+            , bvmUpdateImplicit    = Nothing
+            , bvmSoftforkRule      = Nothing
+            , bvmTxFeePolicy       = Nothing
+            , bvmUnlockStakeEpoch  = Just puseUnlockStakeEpoch
+            }
+    withSafeSigner skey (pure emptyPassphrase) $ \case
+        Nothing -> putText "Invalid passphrase"
+        Just ss -> do
+            updateProposal <- mkUpdateProposalWSign
+                puseBlockVersion bvm puseSoftwareVersion mempty def ss
+            submitUpdateProposal' sendActions ccPeers ss updateProposal
+
+submitUpdateProposal' ::
+       ( HasConfiguration
+       , HasInfraConfiguration
+       , HasUpdateConfiguration
+       , HasNodeConfiguration
+       , HasCompileInfo
+       )
+    => SendActions AuxxMode
+    -> [NodeId]
+    -> SafeSigner
+    -> UpdateProposal
+    -> AuxxMode ()
+submitUpdateProposal' sendActions ccPeers ss updateProposal =
+    if null ccPeers
+        then putText "Error: no addresses specified"
+        else do
+            submitUpdateProposal (immediateConcurrentConversations sendActions ccPeers) ss updateProposal
+            let id = hash updateProposal
+            putText $
+              sformat ("Update proposal submitted, upId: "%hashHexF) id
 
 updateDataElement :: MonadIO m => ProposeUpdateSystem -> m (SystemTag, UpdateData)
 updateDataElement ProposeUpdateSystem{..} = do

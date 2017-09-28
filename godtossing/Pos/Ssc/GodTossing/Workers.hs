@@ -24,7 +24,9 @@ import           Serokell.Util.Exceptions              ()
 import           Serokell.Util.Text                    (listJson)
 import           System.Wlog                           (logDebug, logError, logInfo,
                                                         logWarning)
+import qualified Test.QuickCheck                       as QC
 
+import           Pos.Arbitrary.Ssc.GodTossing          ()
 import           Pos.Binary.Class                      (AsBinary, Bi, asBinary,
                                                         fromBinaryM)
 import           Pos.Binary.GodTossing                 ()
@@ -52,7 +54,7 @@ import           Pos.Core                              (EpochIndex, HasConfigura
                                                         slotSecurityParam, vssMaxTTL)
 import           Pos.Crypto                            (SecretKey, VssKeyPair,
                                                         VssPublicKey, randomNumber,
-                                                        runSecureRandom, vssKeyGen)
+                                                        runSecureRandom)
 import           Pos.Crypto.SecretSharing              (toVssPublicKey)
 import           Pos.DB                                (gsAdoptedBVData)
 import           Pos.Infra.Configuration               (HasInfraConfiguration)
@@ -260,10 +262,7 @@ onNewSlotOpening params SlotId {..} sendActions
         mbOpen' <- case params of
             GtOpeningNone   -> pure Nothing
             GtOpeningNormal -> pure (Just open)
-            GtOpeningWrong  -> do
-                keys <- NE.fromList . map toVssPublicKey <$>
-                        replicateM 6 vssKeyGen
-                Just . snd <$> genCommitmentAndOpening 3 keys
+            GtOpeningWrong  -> Just <$> liftIO (QC.generate QC.arbitrary)
         whenJust mbOpen' $ \open' -> do
             let msg = MCOpening ourId open'
             sscProcessOurMessage (sscProcessOpening ourId open')

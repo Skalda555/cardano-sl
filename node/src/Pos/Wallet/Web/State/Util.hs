@@ -7,7 +7,6 @@ module Pos.Wallet.Web.State.Util
 import           Universum                  hiding (over)
 
 import           Data.Acid                  (createArchive, createCheckpoint)
-import           Data.Time.Clock            (NominalDiffTime, addUTCTime, getCurrentTime)
 import           Data.Time.Units            (TimeUnit)
 import           Formatting                 (sformat, shown, (%))
 import           Mockable                   (Delay, Mockable, delay)
@@ -28,12 +27,20 @@ type MonadAcidCleanup ctx m =
     , Mockable Delay m
     )
 
-cleanupAcidStatePeriodically
-    :: (MonadAcidCleanup ctx m, TimeUnit t)
-    => t -> m ()
+
+-- | This worker does acid cleanup action every (passed)
+-- interval. Action itself consists of two steps:
+--
+-- * Create checkpoint and archive.
+-- * Delete all files in /Archive except for newest one.
+cleanupAcidStatePeriodically ::
+       forall m ctx t. (MonadAcidCleanup ctx m, TimeUnit t)
+    => t
+    -> m ()
 cleanupAcidStatePeriodically interval = perform
   where
-    perform = cleanupAction `catch` handler
+    perform = cleanupAction `catchAny` handler
+
     cleanupAction = forever $ do
         logDebug "Starting cleanup"
         est <- getWalletWebState
@@ -53,7 +60,9 @@ cleanupAcidStatePeriodically interval = perform
                 logDebug $ "Removed " <> pretty removed <> " old archive files"
 
         delay interval
-    handler (e :: SomeException) = do
+
+    handler :: SomeException -> m ()
+    handler e = do
         let report = do
                 logError $ sformat ("acidCleanupWorker failed with error: "%shown%
                                     " restarting in 1m")
@@ -66,12 +75,10 @@ cleanupAcidStatePeriodically interval = perform
     cleanupOld dbPath = do
         let archiveDir = dbPath </> "Archive"
         archiveCheckpoints <- map (archiveDir </>) <$> listDirectory archiveDir
-        withTimestamps <-
+        -- same files, but newest first
+        newestFirst <-
+            map fst . reverse . sortWith snd <$>
             mapM (\f -> (f,) <$> liftIO (getModificationTime f)) archiveCheckpoints
-        curTime <- getCurrentTime
-        -- 3 days
-        let noOlderThan = addUTCTime (negate (3 * 24 * 3600) :: NominalDiffTime) curTime
-        let oldFiles = filter ((< noOlderThan) . snd) withTimestamps
-        forM_ oldFiles $ removeFile . fst
+        let oldFiles = drop 10 newestFirst
+        forM_ oldFiles removeFile
         pure $ length oldFiles
-

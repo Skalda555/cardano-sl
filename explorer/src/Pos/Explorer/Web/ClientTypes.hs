@@ -45,41 +45,43 @@ module Pos.Explorer.Web.ClientTypes
 
 import           Universum
 
-import           Control.Lens               (ix, _Left)
-import qualified Data.ByteArray             as BA
-import qualified Data.List.NonEmpty         as NE
-import           Data.Time.Clock.POSIX      (POSIXTime)
-import           Formatting                 (sformat)
-import           Pos.Binary                 (Bi, biSize)
-import           Pos.Block.Core             (MainBlock, mainBlockSlot, mainBlockTxPayload,
-                                             mcdSlot)
-import           Pos.Block.Types            (Undo (..))
-import           Pos.Core                   (HasConfiguration, timestampToPosix)
-import           Pos.Crypto                 (Hash, hash)
-import           Pos.DB.Block               (MonadBlockDB)
-import           Pos.DB.Class               (MonadDBRead)
-import           Pos.DB.Rocks               (MonadRealDB)
-import           Pos.Explorer               (TxExtra (..))
-import qualified Pos.GState                 as GS
-import           Pos.Lrc                    (getLeaders)
-import           Pos.Merkle                 (getMerkleRoot, mtRoot)
-import           Pos.Slotting               (MonadSlots (..), getSlotStart)
-import           Pos.Ssc.GodTossing         (SscGodTossing)
+import           Control.Lens                     (_Left)
+import qualified Data.ByteArray                   as BA
+import qualified Data.List.NonEmpty               as NE
+import           Data.Time.Clock.POSIX            (POSIXTime)
+import           Formatting                       (sformat)
+import           Pos.Binary                       (Bi, biSize)
+import           Pos.Block.Core                   (MainBlock, mainBlockSlot,
+                                                   mainBlockTxPayload, mcdSlot)
+import           Pos.Block.Types                  (Undo (..))
+import           Pos.Core                         (HasConfiguration, timestampToPosix)
+import           Pos.Crypto                       (Hash, hash)
+import           Pos.DB.Block                     (MonadBlockDB)
+import           Pos.DB.Class                     (MonadDBRead)
+import           Pos.DB.Rocks                     (MonadRealDB)
+import           Pos.Explorer                     (TxExtra (..))
+import qualified Pos.GState                       as GS
+import qualified Pos.Lrc                          as Lrc (getLeader)
+import           Pos.Merkle                       (getMerkleRoot, mtRoot)
+import           Pos.Slotting                     (MonadSlots (..), getSlotStart)
+import           Pos.Ssc.GodTossing               (SscGodTossing)
 import           Pos.Ssc.GodTossing.Configuration (HasGtConfiguration)
-import           Pos.Txp                    (Tx (..), TxId, TxOut (..), TxOutAux (..),
-                                             TxUndo, txpTxs, _txOutputs)
-import           Pos.Types                  (Address, AddressHash, Coin, EpochIndex,
-                                             LocalSlotIndex, SlotId (..), StakeholderId,
-                                             Timestamp, addressF, coinToInteger,
-                                             decodeTextAddress, gbHeader, gbhConsensus,
-                                             getEpochIndex, getSlotIndex, headerHash,
-                                             mkCoin, prevBlockL, sumCoins, unsafeAddCoin,
-                                             unsafeGetCoin, unsafeIntegerToCoin,
-                                             unsafeSubCoin)
-import           Prelude                    ()
-import           Serokell.Data.Memory.Units (Byte)
-import           Serokell.Util.Base16       as SB16
-import           Servant.API                (FromHttpApiData (..))
+import           Pos.Txp                          (Tx (..), TxId, TxOut (..),
+                                                   TxOutAux (..), TxUndo, txpTxs,
+                                                   _txOutputs)
+import           Pos.Types                        (Address, AddressHash, Coin, EpochIndex,
+                                                   LocalSlotIndex, SlotId (..),
+                                                   StakeholderId, Timestamp, addressF,
+                                                   coinToInteger, decodeTextAddress,
+                                                   gbHeader, gbhConsensus, getEpochIndex,
+                                                   getSlotIndex, headerHash, mkCoin,
+                                                   prevBlockL, sumCoins, unsafeAddCoin,
+                                                   unsafeGetCoin, unsafeIntegerToCoin,
+                                                   unsafeSubCoin)
+import           Prelude                          ()
+import           Serokell.Data.Memory.Units       (Byte)
+import           Serokell.Util.Base16             as SB16
+import           Servant.API                      (FromHttpApiData (..))
 
 
 -------------------------------------------------------------------------------------
@@ -205,7 +207,7 @@ toBlockEntry (blk, Undo{..}) = do
         slotIndex     = siSlot  blkHeaderSlot
 
     -- Find the epoch and slot leader
-    epochSlotLeader   <- getLeaderFromEpochSlot epochIndex slotIndex
+    epochSlotLeader   <- Lrc.getLeader $ SlotId epochIndex slotIndex
 
     -- Fill required fields for @CBlockEntry@
     let cbeEpoch      = getEpochIndex epochIndex
@@ -226,24 +228,6 @@ toBlockEntry (blk, Undo{..}) = do
 
 
     return CBlockEntry {..}
-
--- | Get leader from epoch and slot in order to display them on the frontend.
--- Returning @Maybe@ is the simplest implementation for now, since it's hard
--- to forsee what is and what will the state of leaders be at any given moment.
-getLeaderFromEpochSlot
-    :: (MonadBlockDB SscGodTossing m, MonadDBRead m, MonadRealDB ctx m)
-    => EpochIndex
-    -> LocalSlotIndex
-    -> m (Maybe StakeholderId)
-getLeaderFromEpochSlot epochIndex slotIndex = do
-    -- Get leaders from the database
-    leadersMaybe <- getLeaders epochIndex
-    -- If we have leaders for the given epoch, find the leader that is leading
-    -- the slot we are interested in. If we find it, return it, otherwise
-    -- return @Nothing@.
-    pure $ leadersMaybe >>= \leaders -> leaders ^? ix intSlotIndex
-  where
-    intSlotIndex = fromIntegral $ getSlotIndex slotIndex
 
 -- | List of tx entries is returned from "get latest N transactions" endpoint
 data CTxEntry = CTxEntry

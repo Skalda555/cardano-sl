@@ -148,6 +148,7 @@ library
                       , QuickCheck
                       , reflection
                       , serokell-util >= 0.1.3.4
+                      , singletons
                       , stm
                       , tagged
                       , text
